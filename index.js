@@ -1,66 +1,128 @@
-'use strict'
-
-const express = require('express')
+require('dotenv').config()
+const Express = require('express')
+const express = Express()
+const helmet = require('helmet')
 const bodyParser = require('body-parser')
-const request = require('request')
+const cors = require('cors')
 
-const app = express()
+express.use(cors())
+express.use(helmet())
+express.use(bodyParser.json())
+express.use(bodyParser.urlencoded({ extended: false }))
 
-app.set('port', (process.env.PORT || 5000))
 
-// Allows us to process the data
-app.use(bodyParser.urlencoded({extended: false}))
-app.use(bodyParser.json())
-
-// ROUTES
-
-app.get('/', function(req, res) {
-    res.send("Hi I am a chatbot")
-})
-
-let token = ""
-
-// Facebook 
-
-app.get('/webhook/', function(req, res) {
-    if (req.query['hub.verify_token'] === "zakuiba@2016") {
-        res.send(req.query['hub.challenge'])
+express.get(process.env.BASE_PATH + '/:service/webhook/', function(req, res) {
+    if (req.query['hub.verify_token'] === process.env.FACEBOOK_MESSENGER_VERIFY) {
+        return res.send(req.query['hub.challenge'])
     }
-    res.send("Wrong token")
+    res.send('wrong token')
 })
 
-app.post('/webhook/', function(req, res) {
-    let messaging_events = req.body.entry[0].messaging
-    for (let i = 0; i < messaging_events.length; i++) {
-        let event = messaging_events[i]
-        let sender = event.sender.id
-        if (event.message && event.message.text) {
-            let text = event.message.text
-            sendText(sender, "Text echo: " + text.substring(0, 100))
+express.post(process.env.BASE_PATH + '/:service/webhook', async (req, res, next) => {
+    res.locals.service = req.params.service
+
+    const handleService = require(`./handlers/services/${req.params.service}`)
+        .middleware
+    const handler = await handleService(req, res)
+
+    res.status(200)
+    if (handler.error) return res.send(handler.error)
+    if (!handler.success) return res.send('unknown error')
+
+    let handleCommands = await require('./handlers/parsers/commands')(req, res)
+    if (!handleCommands.continue) return res.send({ success: true })
+
+    let handleConversations = await require('./handlers/parsers/conversations')(
+        req,
+        res
+    )
+    if (!handleConversations.continue) return res.send({ success: true })
+
+    await require('./handlers/parsers/uncaught')(req, res)
+    return res.send({ success: true })
+
+})
+
+
+express.post('/liteIM/password', async (req, res, next) => {
+
+    const ActionHandler = require('./handlers/action_handler')
+    const { service, serviceID, email, isUser, password, newPassword } = req.body
+    const { serviceOptions, middleware } = require(`./handlers/services/${service}`)
+
+    res.locals.service = service
+    res.locals.serviceOptions = serviceOptions
+    res.locals.serviceID = serviceID
+    res.locals.message = newPassword ? `${password} ${newPassword}` : password
+
+    res.status(200)
+
+    if (isUser === 'true') {
+        try {
+            await new ActionHandler(service, serviceOptions).getToken(email, password)
+        } catch (err) {
+            //invalid password
+            return res.send({ success: false, error: 'You have entered an incorrect password. Please try again.' })
         }
     }
-    res.sendStatus(200)
+
+    let redirect
+    if (service === 'messenger') {
+        redirect = 'https://www.messenger.com/closeWindow/?image_url=https%3A%2F%2Fwww.lite.im%2Fstatic%2Ficons%2FIcon-1024.png&display_text=Redirecting%20you%20to%20Messenger'
+    }
+    else if (service === 'telegram') {
+        redirect = 'https://t.me/liteIM_bot'
+    }
+
+    let response = redirect ? { success: true, redirect } : { success: true}
+
+    const handler = await middleware(req, res)
+
+    if (handler.error) return res.send(handler.error)
+    if (!handler.success) return res.send('unknown error')
+
+    let handleCommands = await require('./handlers/parsers/commands')(req, res)
+    if (!handleCommands.continue) return res.send(response)
+
+    let handleConversations = await require('./handlers/parsers/conversations')(
+        req,
+        res
+    )
+    if (!handleConversations.continue) return res.send(response)
+
+    await require('./handlers/parsers/uncaught')(req, res)
+    return res.send(response)
+
 })
 
-function sendText(sender, text) {
-    let messageData = {text: text}
-    request({
-        url: "https://graph.facebook.com/v2.6/me/messages",
-        qs : {access_token: token},
-        method: "POST",
-        json: {
-            recipient: {id: sender},
-            message : messageData,
-        }
-    }, function(error, response, body) {
-        if (error) {
-            console.log("sending error")
-        } else if (response.body.error) {
-            console.log("response body error")
-        }
-    })
-}
+express.post(process.env.BASE_PATH + '/notifier', async (req, res) => {
+    const notifier = require('./handlers/notifier')
 
-app.listen(app.get('port'), function() {
-    console.log("running: port")
+    let notifierResult = false
+    try {
+        notifierResult = await notifier(req.body)
+    } catch (e) {
+        console.log(e)
+    }
+
+    res.send(notifierResult)
+})
+
+express.post(process.env.BASE_PATH + '/broadcast', async (req, res) => {
+    const broadcast = require('./handlers/broadcast')
+
+    let broadcastResult = false
+    try {
+        broadcastResult = await broadcast(req.body)
+    } catch (e) {
+        console.log(e)
+    }
+
+    res.send(broadcastResult)
+})
+
+let port = process.env.port || 3001
+express.listen(port, err => {
+    if (err) return console.error('ERROR:', err)
+    console.log('Server is listening on port ', port)
 })
