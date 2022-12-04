@@ -9,8 +9,8 @@
   "author": "kelvin yavwa",
   "license": "SEE LICENCE IN C:\\Users\\user\\Desktop\\shilling\\chatbot\\LICENSE.md",
   "dependencies": {
-    "body-parser": "^1.18.3",
-    "express": "^4.16.4",
+    "body-parser": "^1.19.2",
+    "express": "^4.17.3",
     "request": "^2.88.0"
   }
 }
